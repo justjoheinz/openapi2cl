@@ -5,12 +5,18 @@
   :author "Katherine Cox-Buday <cox.katherine.e@gmail.com>"
   :license  "GNU GPL v3"
   :version "0.0.1"
-  :class :package-inferred-system
-  :depends-on ("openapi2cl/core")
+  :depends-on (:cl-strings :yason :cl-yaml :kebab)
+  :serial t
+  :pathname "src/"
+  :components ((:file "package")
+               (:file "internal")
+               (:file "core"))
   :in-order-to ((test-op (test-op "openapi2cl/tests"))))
 
 (asdf:defsystem :openapi2cl/tests
-  :class :package-inferred-system
-  :depends-on ("rove"
-               "openapi2cl/tests/core")
+  :depends-on (:rove
+               :openapi2cl)
+  :pathname "t/"
+  :serial t
+  :components ((:file "core"))
   :perform (test-op (op c) (symbol-call :rove '#:run c)))

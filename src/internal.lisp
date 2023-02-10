@@ -1,115 +1,4 @@
-(in-package :cl-user)
-(defpackage :openapi2cl/core
-  (:use #:cl)
-  (:import-from #:yason)
-  (:import-from #:cl-yaml)
-  (:import-from #:cl-strings)
-  (:import-from #:kebab)
-  (:export
-   #:with-directory-generate-files
-   #:with-directory-generate
-   #:with-yaml-generate
-   #:with-json-generate))
-(in-package :openapi2cl/core)
-
-;; NOTE: The generation occurs by building up sexps. Any symbols which
-;; are written into these sexps must be prepended by the cl-user
-;; namespace; otherwise the symbols in the generated code will be
-;; prepended by this package's namespace.
-
-(defun generate (root-path openapi client-name)
-  "Generates a client and a list of its methods. These are returned in
-a 2-tuple.
-
-openapi: the sexp representation of a openapi document.
-client-name: the name of the class that hosts all the client methods."
-  (check-type client-name symbol)
-  (let* ((host (gethash "host" openapi))
-         (base-path (gethash "basePath" openapi))
-         (consumes-media-types (gethash "consumes" openapi))
-         (produces-media-types (gethash "produces" openapi))
-         (schemes (or (gethash "schemes" openapi)
-                      '("https")))
-         (security-schemas (security-schemas-from-hash-table
-                            (resolve-object root-path (gethash "securityDefinitions" openapi))))
-         (client (generate-client client-name schemes host base-path
-                                  consumes-media-types produces-media-types
-                                  security-schemas)))
-    (values
-     client
-     (loop for path-name being the hash-keys of (gethash "paths" openapi)
-             using (hash-value path-operation)
-           nconc (generate-path-methods client-name path-name path-operation
-                                        consumes-media-types security-schemas)))))
-
-(defun with-yaml-generate (root-path openapi-yaml client-name)
-  "Generate a client and a list of its methods based on a YAML file.
-
-root-path: The root path of the Yaml file.
-openapi-yaml: a string containing the YAML representation of a openapi document, or a pathname to a YAML document.
-client-name: the name of the class that hosts all the client methods."
-  (check-type root-path (or string pathname))
-  (check-type openapi-yaml (or string pathname))
-  (check-type client-name symbol)
-  (generate root-path (yaml:parse openapi-yaml) client-name))
-
-(defun with-json-generate (root-path openapi-json client-name)
-  "Generate a client and a list of its methods based on a YAML file.
-
-root-path: The root path of the Json file.
-openapi-json: a string containing the JSON representation of a openapi document, or a pathname to a JSON document.
-client-name: the name of the class that hosts all the client methods."
-  (check-type root-path (or string pathname))
-  (check-type openapi-json (or string pathname))
-  (check-type client-name symbol)
-  (generate root-path (yason:parse openapi-json) client-name))
-
-(defun with-directory-generate (path process-results-fn)
-  "Given a pathname, process the YAML and JSON files within, and
-call `process-results-fn'. This function should take these
-arguments: (1) The file-path (2) the client definition (3) the list of
-methods for this client."
-  (check-type process-results-fn function)
-  (flet ((with-file-generate (file-path)
-           (let* ((type (pathname-type file-path))
-                  (name (kebab-symbol-from-string (pathname-name file-path)))
-                  (output-path (make-pathname :type "lisp" :defaults file-path)))
-             (multiple-value-bind (client-def methods-list)
-                 (cond ((string= type "yaml")
-                        (with-yaml-generate (uiop:pathname-directory-pathname file-path) file-path name))
-                       ((string= type "json")
-                        (with-json-generate (uiop:pathname-directory-pathname file-path) file-path name)))
-               (funcall process-results-fn output-path client-def methods-list)))))
-    (mapcar #'with-file-generate (directory path))))
-
-(defun with-directory-generate-files (input-path output-path package-root &optional preamble)
-  "Given a pathname, generate lisp files for every specification
-encountered and processed.
-
-package-root will be used as the root of each file's package. The
-file's name will be appended to this forming the fully qualified
-package name."
-  (check-type package-root symbol)
-  (flet ((write-defs-out (file-path client-def methods-list)
-           (let ((file-path (make-pathname :defaults file-path
-                                           :directory output-path))
-                 (*package* (find-package :cl-user)))
-             (with-open-file (stream file-path :direction :output :if-exists :supersede)
-               (format t "Output path: ~a~%" file-path)
-               (when preamble (format stream "~a~%~%" preamble)
-                     (finish-output))
-               (when package-root
-                 (dolist (pkg-clause (generate-package-clauses
-                                      (intern (string-upcase (format nil "~a/~a" package-root (pathname-name file-path))))
-                                      :packages-using '(#:cl)
-                                      :packages-import '(#:cl-strings)))
-                   (format stream "~s~%" pkg-clause)
-                   (finish-output))
-                 (format stream "~%~%"))
-               (format stream "~s~%" client-def)
-               (finish-output)
-               (dolist (m methods-list) (format stream "~%~%~s~%" m) (finish-output stream))))))
-    (with-directory-generate input-path #'write-defs-out)))
+(in-package :openapi2cl/internal)
 
 ;;; Unexported
 
@@ -247,7 +136,8 @@ code."
         ;; Synthesized fields
         for body-param = (find-if #'parameter-location-schema-p parameters)
         for method-name = (if operation-id operation-id (format nil "~a-~a" operation-name path-name))
-        for required-parameters = (remove body-param (remove-if-not #'parameter-required-p parameters))
+        for required-parameters = (remove-if-not #'parameter-required-p parameters)
+        ;;for required-parameters = (remove body-param (remove-if-not #'parameter-required-p parameters))
         for optional-parameters = (remove-if #'parameter-required-p parameters)
         ;; Enumerate through the known valid operations that we know
         ;; how to handle. Ignore all else.
@@ -255,7 +145,21 @@ code."
           do (when body-param
                (multiple-value-bind (required-body-params optional-body-params)
                    (generate-schema-object-parameters (gethash "schema" body-param))
-                 (setf required-parameters (append required-parameters required-body-params)
+                 (when body-param
+                   (loop for key being the hash-keys of body-param
+                           using (hash-value value)
+                           do (format t "  bp : ~a ~a~%" key value)))
+                  (when required-parameters
+                    (loop for rp in required-parameters
+                          do
+                             (loop for key being the hash-keys of rp
+                                     using (hash-value value)
+                                   do (format t "  rp : ~a ~a~%" key value))))
+                 (when required-body-params
+                   (loop for key being the hash-keys of required-body-params
+                       using (hash-value value)
+                       do (format t "  rbp: ~a ~a~%" key value)))
+                 (setq required-parameters (append required-parameters required-body-params)
                        optional-parameters (append optional-parameters optional-body-params))))
         collect (let* ((param-descriptions (generate-parameter-comments (append required-parameters
                                                                                 optional-parameters)))
@@ -367,8 +271,11 @@ the provided values meet any defined constraints."
   (check-type required-parameters list)
   (check-type optional-parameters list)
   (check-type security-requirement list)
+  (format t "method-name: ~a~%  required-parameters: ~a~%" method-name required-parameters)
+
   (let ((lisp-required-parameters (mapcar #'lisp-parameter-name required-parameters))
         (lisp-optional-parameters (mapcar #'lisp-parameter-name optional-parameters)))
+    (format t "  lisp-required-parameters: ~a~%" lisp-required-parameters)
     ;; Generated method begins here
     `(defmethod ,(kebab-symbol-from-string method-name) ((cl-user::client ,client-name)
                                                          ,@lisp-required-parameters
@@ -402,7 +309,10 @@ the provided values meet any defined constraints."
               (setf body-params (append body-params form-params)
                     form-params nil))
           `(let (,@(when path-params '((cl-user::path-params (list))))
-                 ,@(when query-params '((cl-user::query-params (list))))
+                 ,@(when (or query-params
+                             (and security-requirement
+                                  (eq (security-type (cdr security-requirement)) 'api-key)))
+                     '((cl-user::query-params (list))))
                  ,@(when headers '((cl-user::headers (list))))
                  ,@(when body-params '((cl-user::body-params (list))))
                  ,@(when (and (media-type-form-p consumes-media-type)
@@ -432,7 +342,7 @@ the provided values meet any defined constraints."
                 (let ((accessor (kebab-symbol-from-string (car security-requirement)))
                       (requirement (cdr security-requirement)))
                   `(setf cl-user::query-params (push (cons ,(name requirement)
-                                                  (,accessor cl-user::client))
+                                                           (,accessor cl-user::client))
                                                      cl-user::query-params))))
              ,@(generate-http-request-population headers 'cl-user::headers)
              ,@(if (media-type-form-p consumes-media-type)
@@ -567,8 +477,8 @@ are '(query header path body form-data)"
                  schema-name
                  (make-instance 'security-schema
                                 :name (gethash "name" schema)
-                                :in (kebab-symbol-from-string (gethash "in" schema) :openapi2cl/core)
-                                :type (kebab-symbol-from-string (gethash "type" schema) :openapi2cl/core)
+                                :in (kebab-symbol-from-string (gethash "in" schema) :openapi2cl)
+                                :type (kebab-symbol-from-string (gethash "type" schema) :openapi2cl)
                                 :description (gethash "description" schema)
                                 :flow (alexandria:when-let (flow (gethash "flow" schema)) (intern flow))
                                 :authorization-url (gethash "authorizationUrl" schema)
@@ -577,7 +487,7 @@ are '(query header path body form-data)"
 
 (defclass security-schema (schema-variable)
   ((type
-    :type security-type
+    :type security-types
     :documentation
     "The type of the security scheme."
     :initarg :type
