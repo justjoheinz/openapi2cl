@@ -2,6 +2,7 @@
 
 ;;; Unexported
 
+
 (defun resolve-ref (ref)
   "Returns the referenced object"
   (check-type ref pathname)
@@ -45,6 +46,10 @@ code."
 (defun parameter-type (param)
   (check-type param hash-table)
   (gethash "type" param))
+
+(defun parameter-description (param)
+  (check-type param hash-table)
+  (gethash "description" param))
 
 (defun parameter-required-p (param)
   (check-type param hash-table)
@@ -145,20 +150,7 @@ code."
           do (when body-param
                (multiple-value-bind (required-body-params optional-body-params)
                    (generate-schema-object-parameters (gethash "schema" body-param))
-                 (when body-param
-                   (loop for key being the hash-keys of body-param
-                           using (hash-value value)
-                           do (format t "  bp : ~a ~a~%" key value)))
-                  (when required-parameters
-                    (loop for rp in required-parameters
-                          do
-                             (loop for key being the hash-keys of rp
-                                     using (hash-value value)
-                                   do (format t "  rp : ~a ~a~%" key value))))
-                 (when required-body-params
-                   (loop for key being the hash-keys of required-body-params
-                       using (hash-value value)
-                       do (format t "  rbp: ~a ~a~%" key value)))
+                 (log:debug body-param required-parameters required-body-params)
                  (setq required-parameters (append required-parameters required-body-params)
                        optional-parameters (append optional-parameters optional-body-params))))
         collect (let* ((param-descriptions (generate-parameter-comments (append required-parameters
@@ -271,11 +263,11 @@ the provided values meet any defined constraints."
   (check-type required-parameters list)
   (check-type optional-parameters list)
   (check-type security-requirement list)
-  (format t "method-name: ~a~%  required-parameters: ~a~%" method-name required-parameters)
+  (log:debug method-name required-parameters optional-parameters)
 
   (let ((lisp-required-parameters (mapcar #'lisp-parameter-name required-parameters))
         (lisp-optional-parameters (mapcar #'lisp-parameter-name optional-parameters)))
-    (format t "  lisp-required-parameters: ~a~%" lisp-required-parameters)
+    (log:debug lisp-required-parameters lisp-optional-parameters)
     ;; Generated method begins here
     `(defmethod ,(kebab-symbol-from-string method-name) ((cl-user::client ,client-name)
                                                          ,@lisp-required-parameters
@@ -414,7 +406,7 @@ inclusion in a method's docstring."
   (with-output-to-string (parameter-desc)
     (loop for param in parameters
           for lisp-param-name = (lisp-parameter-name param)
-          for param-desc = (gethash "description" param)
+          for param-desc = (parameter-description param)
           when param-desc
           do (format parameter-desc "~a: ~a~%" lisp-param-name param-desc))))
 

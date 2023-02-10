@@ -5,7 +5,7 @@
   :author "Katherine Cox-Buday <cox.katherine.e@gmail.com>"
   :license  "GNU GPL v3"
   :version "0.0.1"
-  :depends-on (:cl-strings :yason :cl-yaml :kebab)
+  :depends-on (:cl-strings :yason :cl-yaml :kebab :log4cl)
   :serial t
   :pathname "src/"
   :components ((:file "package")
